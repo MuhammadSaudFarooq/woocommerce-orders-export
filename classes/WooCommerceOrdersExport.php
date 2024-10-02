@@ -75,10 +75,10 @@ class WooCommerce_Orders_Export
                     }
 
                     // Check if the order has a subscription (skip if it does)
-                    $isMember = wcs_get_subscriptions_for_order($order->get_id());
+                    /* $isMember = wcs_get_subscriptions_for_order($order->get_id());
                     if (!empty($isMember)) {
                         continue; // Skip if this order is linked to a subscription
-                    }
+                    } */
 
                     // Loop through the items to check for the excluded product
                     $skip_order = false;
@@ -94,6 +94,11 @@ class WooCommerce_Orders_Export
                         // Skip order if it contains the excluded bulk product
                         if ($product_id == $this->exclude_bulk_product_id) {
                             $skip_order = true;
+                            break;
+                        }
+
+                        if (empty($isMember)) {
+                            $skip_order = true; // Set flag to skip this order
                             break;
                         }
                     }
@@ -384,7 +389,7 @@ class WooCommerce_Orders_Export
             $headers = ['Content-Type: text/html; charset=UTF-8'];
 
             if (isset($_GET['emailAddr']) && $_GET['emailAddr'] != '') {
-                $email_to = 'muhammad.saud@koderlabs.com, ' . $_GET['emailAddr'];
+                $email_to = $_GET['emailAddr'];
             }
 
             // Attach the spreadsheet file
