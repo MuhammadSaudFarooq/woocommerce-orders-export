@@ -18,7 +18,9 @@ class WooCommerce_Orders_Export
         // Hook for guest users
         add_action("wp_ajax_nopriv_orders_csv", [$this, 'orders_csv_fn']);
 
-        // Exclude specific product IDs
+        // Enqueue scripts
+        // add_action('wp_enqueue_scripts', [$this, 'enqueue_scripts']);
+
         $this->exclude_donation_product_id = 893;
         $this->exclude_bulk_product_id = 27;
         $this->exclude_single_product_id = 14;
@@ -31,13 +33,13 @@ class WooCommerce_Orders_Export
             // Start output buffering to avoid any unexpected output
             ob_start();
 
-            // Create a temporary file for the CSV
-            $upload_dir = wp_upload_dir();
-            $file_path = $upload_dir['basedir'] . '/orders-export-' . date('Y-m-d-H-i-s') . '.csv';
-            $output = fopen($file_path, 'w');
+            // Create a new spreadsheet
+            $spreadsheet = new Spreadsheet();
 
-            // Add header row to CSV
-            fputcsv($output, [
+            // Add first sheet (Single Orders)
+            $sheet1 = $spreadsheet->getActiveSheet();
+            $sheet1->setTitle('Single Orders');
+            $sheet1->fromArray([
                 'First Name',
                 'Last Name',
                 'Email',
@@ -53,24 +55,30 @@ class WooCommerce_Orders_Export
                 'Phone Number',
                 'Number of Cards',
                 'Amount per Card'
-            ]);
+            ], NULL, 'A1');
 
-            // Single Orders
+            // Get WooCommerce orders
             $args1 = [
-                'limit' => -1, // No limit on the number of orders
-                // 'date_created' => '>=' . (new WC_DateTime())->modify('-1 day')->date('Y-m-d H:i:s'),  // Orders from the last 24 hours
+                'limit' => -1,
             ];
             $orders1 = wc_get_orders($args1);
 
             if (empty($orders1)) {
                 error_log('No orders found. Check the wc_get_orders query.');
             } else {
+                $row = 2; // Start at the second row
                 foreach ($orders1 as $order) {
                     // Check if the order contains only one product
                     $items = $order->get_items();
                     if (count($items) != 1) {
                         continue; // Skip if the order has more than one product
                     }
+
+                    // Check if the order has a subscription (skip if it does)
+                    /* $isMember = wcs_get_subscriptions_for_order($order->get_id());
+                    if (!empty($isMember)) {
+                        continue; // Skip if this order is linked to a subscription
+                    } */
 
                     // Loop through the items to check for the excluded product
                     $skip_order = false;
@@ -112,7 +120,6 @@ class WooCommerce_Orders_Export
                     $country_code = $order->get_billing_country();
                     $phone = $order->get_billing_phone();
                     $reference_details = $order->get_id();
-                    $state_fullname = WC()->countries->get_states($country_code)[$state];
 
                     // Number of cards and amount per card (custom logic)
                     $number_of_cards = 1; // Assuming it's one card per single-product order
@@ -121,8 +128,8 @@ class WooCommerce_Orders_Export
                     // Country dialing code (custom function or static mapping)
                     $dialing_code = ($country_code != '') ? $this->get_country_dialing_code($country_code) : $this->get_country_dialing_code($state);
 
-                    // Add row to CSV
-                    fputcsv($output, [
+                    // Add row to spreadsheet
+                    $sheet1->fromArray([
                         $first_name,
                         $last_name,
                         $email,
@@ -130,7 +137,7 @@ class WooCommerce_Orders_Export
                         $address_1,
                         $address_2,
                         $city,
-                        $state_fullname,
+                        $state,
                         $zip_code,
                         $country_code,
                         $dialing_code,
@@ -138,19 +145,36 @@ class WooCommerce_Orders_Export
                         $phone,
                         $number_of_cards,
                         $amount_per_card
-                    ]);
+                    ], NULL, 'A' . $row);
 
-                    // Add an empty row after the filled row
-                    fputcsv($output, []);
+                    $row++;
                 }
             }
 
-            // Bulk Orders
-            fputcsv($output, []);
-            fputcsv($output, ['If Bulk']);
+            // Add second sheet (Bulk Orders)
+            $sheet2 = $spreadsheet->createSheet();
+            $sheet2->setTitle('Bulk Orders');
+            $sheet2->fromArray([
+                'First Name',
+                'Last Name',
+                'Email',
+                'Amount',
+                'Address',
+                'Address 2',
+                'City',
+                'State',
+                'Zip Code',
+                'Country Code',
+                'Country Dialing Code',
+                'Reference Detals',
+                'Phone Number',
+                'Number of Cards',
+                'Amount per Card'
+            ], NULL, 'A1');
+
+            // Get WooCommerce orders
             $args2 = [
-                'limit'        => -1,  // No limit on the number of orders
-                // 'date_created' => '>=' . (new WC_DateTime())->modify('-1 day')->date('Y-m-d H:i:s'),  // Orders from the last 24 hours
+                'limit' => -1,
             ];
             $orders2 = wc_get_orders($args2);
 
@@ -170,7 +194,6 @@ class WooCommerce_Orders_Export
 
                     // Loop through the items to check for the excluded product
                     $skip_order = false;
-                    $bulk_count = 0;
                     foreach ($items as $item) {
                         if ($item->get_product_id() == $this->exclude_donation_product_id) {
                             $skip_order = true; // Set flag to skip this order
@@ -186,9 +209,6 @@ class WooCommerce_Orders_Export
                             $skip_order = true; // Set flag to skip this order
                             break;
                         }
-
-                        $product_data = $item->get_product();
-                        $bulk_count = $product_data->get_attributes()['pa_package'];
                     }
                     if ($skip_order) {
                         continue; // Skip this order if it contains the excluded product
@@ -198,7 +218,7 @@ class WooCommerce_Orders_Export
                     $first_name = $order->get_billing_first_name();
                     $last_name = $order->get_billing_last_name();
                     $email = $order->get_billing_email();
-                    $amount = number_format($order->get_total() * (int)$bulk_count, 2);
+                    $amount = $order->get_total();
                     $address_1 = $order->get_billing_address_1();
                     $address_2 = $order->get_billing_address_2();
                     $city = $order->get_billing_city();
@@ -207,18 +227,17 @@ class WooCommerce_Orders_Export
                     $country_code = $order->get_billing_country();
                     $phone = $order->get_billing_phone();
                     $reference_details = $order->get_id();
-                    $state_fullname = WC()->countries->get_states($country_code)[$state];
 
                     // Number of cards and amount per card (custom logic)
-                    $number_of_cards = $bulk_count; // Assuming it's one card per single-product order
-                    $amount_per_card = $order->get_total();
+                    $number_of_cards = 1; // Assuming it's one card per single-product order
+                    $amount_per_card = $amount / $number_of_cards;
 
                     // Country dialing code (custom function or static mapping)
                     $dialing_code = ($country_code != '') ? $this->get_country_dialing_code($country_code) : $this->get_country_dialing_code($state); // Define or hard-code this function
                     // $dialing_code = '123'; // Define or hard-code this function
 
-                    // Add row to CSV
-                    fputcsv($output, [
+                    // Add row to spreadsheet
+                    $sheet2->fromArray([
                         $first_name,
                         $last_name,
                         $email,
@@ -226,7 +245,7 @@ class WooCommerce_Orders_Export
                         $address_1,
                         $address_2,
                         $city,
-                        $state_fullname,
+                        $state,
                         $zip_code,
                         $country_code,
                         $dialing_code,
@@ -234,16 +253,36 @@ class WooCommerce_Orders_Export
                         $phone,
                         $number_of_cards,
                         $amount_per_card
-                    ]);
+                    ], NULL, 'A' . $row);
+
+                    $row++;
                 }
             }
 
-            // Membership Orders
-            fputcsv($output, []);
-            fputcsv($output, ['If Membership']);
+            // Add third sheet (Membership Orders)
+            $sheet3 = $spreadsheet->createSheet();
+            $sheet3->setTitle('Membership Orders');
+            $sheet3->fromArray([
+                'First Name',
+                'Last Name',
+                'Email',
+                'Amount',
+                'Address',
+                'Address 2',
+                'City',
+                'State',
+                'Zip Code',
+                'Country Code',
+                'Country Dialing Code',
+                'Reference Detals',
+                'Phone Number',
+                'Number of Cards',
+                'Amount per Card'
+            ], NULL, 'A1');
+
+            // Get WooCommerce orders
             $args3 = [
-                'limit'        => -1,  // No limit on the number of orders
-                // 'date_created' => '>=' . (new WC_DateTime())->modify('-1 day')->date('Y-m-d H:i:s'),  // Orders from the last 24 hours
+                'limit' => -1,
             ];
             $orders3 = wc_get_orders($args3);
 
@@ -291,7 +330,6 @@ class WooCommerce_Orders_Export
                     $country_code = $order->get_billing_country();
                     $phone = $order->get_billing_phone();
                     $reference_details = $order->get_id();
-                    $state_fullname = WC()->countries->get_states($country_code)[$state];
 
                     // Number of cards and amount per card (custom logic)
                     $number_of_cards = 1; // Assuming it's one card per single-product order
@@ -301,8 +339,8 @@ class WooCommerce_Orders_Export
                     $dialing_code = ($country_code != '') ? $this->get_country_dialing_code($country_code) : $this->get_country_dialing_code($state); // Define or hard-code this function
                     // $dialing_code = '123'; // Define or hard-code this function
 
-                    // Add row to CSV
-                    fputcsv($output, [
+                    // Add row to spreadsheet
+                    $sheet3->fromArray([
                         $first_name,
                         $last_name,
                         $email,
@@ -310,7 +348,7 @@ class WooCommerce_Orders_Export
                         $address_1,
                         $address_2,
                         $city,
-                        $state_fullname,
+                        $state,
                         $zip_code,
                         $country_code,
                         $dialing_code,
@@ -318,32 +356,53 @@ class WooCommerce_Orders_Export
                         $phone,
                         $number_of_cards,
                         $amount_per_card
-                    ]);
+                    ], NULL, 'A' . $row);
+
+                    $row++;
                 }
             }
 
-            // Close the file
-            fclose($output);
+            // Set headers to force download of XLSX
+            /* header('Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+            header('Content-Disposition: attachment; filename="orders-export-' . date('Y-m-d-H-i-s') . '.xlsx";');
+            header('Cache-Control: max-age=0');
+
+            // Write the spreadsheet to output
+            $writer = new Xlsx($spreadsheet);
+            $writer->save('php://output');
+
+            // Clean output buffer and flush content
+            ob_flush(); // Ensure all output is sent
+            exit; */
+
+
+            // Save spreadsheet to a temporary file
+            $upload_dir = wp_upload_dir();
+            $file_path = $upload_dir['basedir'] . '/orders-export-' . date('Y-m-d-H-i-s') . '.xlsx';
+            $writer = new Xlsx($spreadsheet);
+            $writer->save($file_path);
 
             // Email setup
             $email_to = 'muhammad.saud@koderlabs.com'; // Change to recipient email address
             $subject = 'Exported Orders CSV';
-            $message = 'Orders CSV File.';
+            $message = 'Exported Orders CSV.';
             $headers = ['Content-Type: text/html; charset=UTF-8'];
 
             if (isset($_GET['emailAddr']) && $_GET['emailAddr'] != '') {
                 $email_to = $_GET['emailAddr'];
             }
 
-            // Attach the CSV file
+            // Attach the spreadsheet file
             $attachments = [$file_path];
 
             // Send the email with the attachment
             $mail_sent = wp_mail($email_to, $subject, $message, $headers, $attachments);
 
             if ($mail_sent) {
-                error_log('Email sent successfully with the CSV attachment.');
+                // Log success or handle any post-email actions
+                error_log('Email sent successfully with the attachment.');
             } else {
+                // Log failure or handle errors
                 error_log('Failed to send email.');
             }
 
@@ -353,7 +412,7 @@ class WooCommerce_Orders_Export
             }
 
             // Clean output buffer and flush content
-            ob_flush();
+            ob_flush(); // Ensure all output is sent
             exit;
         }
 
